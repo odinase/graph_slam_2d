@@ -16,6 +16,7 @@ import numpy as np
 import gtsam
 from gtsam.symbol_shorthand import X, L
 
+
 # Create noise models
 PRIOR_NOISE = gtsam.noiseModel.Diagonal.Sigmas(np.array([0.3, 0.3, 0.1]))
 ODOMETRY_NOISE = gtsam.noiseModel.Diagonal.Sigmas(np.array([0.2, 0.2, 0.1]))
@@ -79,5 +80,16 @@ print("\nFinal Result:\n{}".format(result))
 
 # Calculate and print marginal covariances for all variables
 marginals = gtsam.Marginals(graph, result)
-for (key, str) in [(X1, "X1"), (X2, "X2"), (X3, "X3"), (L1, "L1"), (L2, "L2")]:
-    print("{} covariance:\n{}\n".format(str, marginals.marginalCovariance(key)))
+
+nodes = np.array([X(1), X(2), X(3)])
+
+S = marginals.jointMarginalCovariance(gtsam.KeyVector(nodes))
+
+np.set_printoptions(linewidth=120, precision=4, suppress=True)
+
+print(S.at(X(1), X(2)))
+
+
+
+# for (key, str) in [(X1, "X1"), (X2, "X2"), (X3, "X3"), (L1, "L1"), (L2, "L2")]:
+#     print("{} covariance:\n{}\n".format(str, marginals.marginalCovariance(key)))

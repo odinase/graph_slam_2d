@@ -68,7 +68,7 @@ def JCBBrec(z, zbar, S, alpha1, g2, j, a, ic, abest):
 
         if n + (m - j - 2) >= num_associations(abest):
             a[j] = -1
-            abest = JCBBrec(z, zbar, S, alpha1, g2, j + 1, a, ic, abest)
+            abest = JCBBrec(z, zbar, S, alpha1, g2, j + 1, a.copy(), ic, abest)
 
     return abest
 

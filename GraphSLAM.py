@@ -4,11 +4,14 @@ from gtsam.symbol_shorthand import X, L
 import utils
 
 class GraphSLAM:
-    def __init__(self, p, q, r):
+    def __init__(self, p, q, r, alphas=np.array([0.001, 0.0001]), sensor_offset=np.zeros(2)):
         
         # Add noise models
         self.odometry_noise = gtsam.noiseModel.Diagonal.Sigmas(q)
         self.measurement_noise = gtsam.noiseModel.Diagonal.Sigmas(r)
+        
+        self.alphas = alphas
+        self.sensor_offset = sensor_offset
 
         # Create graph and initilize newest pose
         self.graph = gtsam.NonlinearFactorGraph()
@@ -54,5 +57,23 @@ class GraphSLAM:
 
 
     def update(self, z):
-        
-        
+        """
+        Takes in vector of range-bearing measurements of landmarks. 
+
+        Should do association by JCBB to existing landmarks first. This will allow for adding extra factors 
+        """
+        # S = marginals.jointMarginalCovariance(gtsam.KeyVector(nodes))
+
+
+        a = JCBB(z, zpred, S, self.alphas[0], self.alphas[1])
+        # Extract associated measurements
+        zinds = np.empty_like(z, dtype=bool)
+        zinds[::2] = a > -1  # -1 means no association
+        zinds[1::2] = zinds[::2]
+        zass = z[zinds] # associated measurements
+
+        # extract and rearange predicted measurements and cov
+        zbarinds = np.empty_like(zass, dtype=int)
+        zbarinds[::2] = 2 * a[a > -1]
+        zbarinds[1::2] = 2 * a[a > -1] + 1
+        zpredass = zpred[zbarinds]
