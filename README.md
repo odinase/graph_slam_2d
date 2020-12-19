@@ -1,2 +1,5 @@
-# graph_slam_2d
-Graph SLAM sim and VP with GTSAM. Python
+# GraphSLAM in Python with GTSAM/ISAM backend
+
+## Frontend
+
+## Backend
