@@ -81,18 +81,18 @@ class GraphSLAM:
             self.pose_count = latest_keyframe_id + 1
 
 
-    def meas_in_inertial_cartesian(self, z):
-        # Transpose here to make the math easier
-        z = z.T
-        # Cartesian sensor frame
-        z_c_s = np.vstack((z[0]*np.cos(z[1]), z[0]*np.sin(z[1])))
-        # Cartesian body frame
-        z_c_b = self.sensor_offset.rotation().matrix()@z_c_s + self.sensor_offset.translation()[:,None]
-        # Cartesian inertial (world) frame
-        z_c_i = self.latest_pose.rotation().matrix()@z_c_b + self.latest_pose.translation()[:,None]
+    # def meas_in_inertial_cartesian(self, z):
+    #     # Transpose here to make the math easier
+    #     z = z.T
+    #     # Cartesian sensor frame
+    #     z_c_s = np.vstack((z[0]*np.cos(z[1]), z[0]*np.sin(z[1])))
+    #     # Cartesian body frame
+    #     z_c_b = self.sensor_offset.rotation().matrix()@z_c_s + self.sensor_offset.translation()[:,None]
+    #     # Cartesian inertial (world) frame
+    #     z_c_i = self.latest_pose.rotation().matrix()@z_c_b + self.latest_pose.translation()[:,None]
 
-        # Transpose back to make the 
-        return z_c_i.T
+    #     # Transpose back to make the 
+    #     return z_c_i.T
 
 
     def new_observation(self, z):
@@ -110,7 +110,11 @@ class GraphSLAM:
         assert self.landmarks.shape[0] == self.landmarks_idxs.shape[0], "GraphSLAM.new_observation: Must be equally many landmarks as landmarks_idxs"
 
         numLmks = self.landmarks_idxs.shape[0]
-        z_c_i = self.meas_in_inertial_cartesian(z)
+        z_c_s = utils.polar2cart(z)
+        T_bs = self.sensor_offset
+        T_ib = self.latest_pose
+        T_is = T_ib.compose(T_bs)
+        z_c_i = utils.transform(T_is, z_c_s)
 
         assert z_c_i.shape == z.shape, "GraphSLAM.new_observation: z_c_i and z must have same shape"
 
@@ -118,14 +122,17 @@ class GraphSLAM:
         if numLmks > 0:
             marginals = gtsam.Marginals(self.graph, self.estimates)
             
-            S = marginals.jointMarginalCovariance(gtsam.KeyVector(self.landmarks_idxs)).fullMatrix()
+            P_ = marginals.jointMarginalCovariance(gtsam.KeyVector(self.landmarks_idxs)).fullMatrix()
 
-            z = z.ravel()
-            T_bi = self.latest_pose.inverse()
-            landmarks_b = utils.transform(T_bi, self.landmarks)
-            l_ranges = np.linalg.norm(landmarks_b, axis=1)
-            l_bearing = np.arctan2(landmarks_b[:,1], landmarks_b[:,0])
-            z_pred = np.vstack((l_ranges, l_bearing)).ravel("F")
+            # z = z.ravel()
+            # T_bi = self.latest_pose.inverse()
+            # landmarks_b = utils.transform(T_bi, self.landmarks)
+            # l_ranges = np.linalg.norm(landmarks_b, axis=1)
+            # l_bearing = np.arctan2(landmarks_b[:,1], landmarks_b[:,0])
+            # z_pred = np.vstack((l_ranges, l_bearing)).ravel("F")
+
+            z = z_c_i.ravel()
+            z_pred = self.landmarks.ravel()
 
             a = JCBB(z, z_pred, S, self.alphas[0], self.alphas[1])
 
@@ -153,29 +160,6 @@ class GraphSLAM:
 
             # Add landmark for later association
             self.landmarks = np.append(self.landmarks, z_c_i, axis=0)
-
-    # def update(self, z):
-    #     """
-    #     Takes in vector of range-bearing measurements of landmarks. 
-
-    #     Should do association by JCBB to existing landmarks first. This will allow for adding extra factors 
-    #     """
-    #     # S = marginals.jointMarginalCovariance(gtsam.KeyVector(nodes))
-
-
-    #     a = JCBB(z, zpred, S, self.alphas[0], self.alphas[1])
-    #     # Extract associated measurements
-    #     zinds = np.empty_like(z, dtype=bool)
-    #     zinds[::2] = a > -1  # -1 means no association
-    #     zinds[1::2] = zinds[::2]
-    #     zass = z[zinds] # associated measurements
-
-    #     # extract and rearange predicted measurements and cov
-    #     zbarinds = np.empty_like(zass, dtype=int)
-    #     zbarinds[::2] = 2 * a[a > -1]
-    #     zbarinds[1::2] = 2 * a[a > -1] + 1
-    #     zpredass = zpred[zbarinds]
-
 
 # %% Testing
 

@@ -19,3 +19,25 @@ def transform(T: gtsam.Pose2, p: np.ndarray):
     R = T.rotation().matrix()
     t = T.translation()
     return p@R.T + t
+
+def polar2cart(p):
+    """
+    Assumes p is [[range1, bearing1], [range2, bearing2], ...]
+    """
+    c = np.vstack((
+        p[:,0]*np.cos(p[:,1]),
+        p[:,0]*np.sin(p[:,1])
+    )).T
+
+    return c
+
+def cart2polar(c):
+    """
+    Assumes c is [[x1, y1], [x2, y2], ...]
+    """
+    p = np.vstack((
+        np.linalg.norm(c, axis=1),
+        np.arctan2(c[:,1], c[:,0])
+    )).T
+
+    return p
