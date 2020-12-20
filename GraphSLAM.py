@@ -1,79 +1,220 @@
+# %% GraphSLAM
 import numpy as np
 import gtsam
 from gtsam.symbol_shorthand import X, L
 import utils
+import queue
+from JCBB import JCBB
 
 class GraphSLAM:
-    def __init__(self, p, q, r, alphas=np.array([0.001, 0.0001]), sensor_offset=np.zeros(2)):
+    def __init__(self, p, q, r, alphas=np.array([0.001, 0.0001]), sensor_offset=np.zeros(2), keyframe_rotation = 2.5*np.pi/180, keyframe_distance = 0.5):
         
+        # Thresholds for when to add new pose to graph
+        self.keyframe_rotation = keyframe_rotation
+        self.keyframe_distance = keyframe_distance
+
         # Add noise models
-        self.odometry_noise = gtsam.noiseModel.Diagonal.Sigmas(q)
-        self.measurement_noise = gtsam.noiseModel.Diagonal.Sigmas(r)
+        self.Q = gtsam.noiseModel.Diagonal.Sigmas(q)
+        self.R = gtsam.noiseModel.Diagonal.Sigmas(r)
         
         self.alphas = alphas
-        self.sensor_offset = sensor_offset
+        # Position of sensor offset, transform from sensor to body frame
+        self.sensor_offset = gtsam.Pose2(sensor_offset[0], sensor_offset[1], 0)
 
         # Create graph and initilize newest pose
+        self.estimates = gtsam.Values()
         self.graph = gtsam.NonlinearFactorGraph()
-        self.poses = gtsam.Values()
 
-        # To enumerate all poses and landmarks
-        self.kx = 1
-        self.kl = 1
+        # Start in origin
+        self.latest_pose = gtsam.Pose2(0.0, 0.0, 0.0)
 
-        self.landmarks = np.empty(0)
+        # To enumerate all poses and landmarks in the graph
+        self.landmark_count = 1
+        self.pose_count = 0
+
+        # Needs to store landmarks for associations later
+        self.landmarks = np.empty((0, 2))
+        self.landmarks_idxs = np.empty((0,), dtype=int)
 
         # Initilize graph with prior
         prior_noise = gtsam.noiseModel.Diagonal.Sigmas(p)
-        self.graph.add(gtsam.PriorFactorPose2(X(self.kx), gtsam.Pose2(0.0, 0.0, 0.0), prior_noise))
+        self.graph.add(gtsam.PriorFactorPose2(X(0), self.latest_pose, prior_noise))
+        self.estimates.insert(X(0), self.latest_pose)
 
+    def get_kf_pose(self, kf_idx):
+        return self.estimates.atPose2(X(kf_idx))
 
-    def add_factor(self, factor):
-        self.graph.add(factor)
-
-
-    def f(self, x, u):
-        xpred = np.hstack(
-            (utils.rot_mat(x[2]) @ u, utils.wrapToPi(x[2] + u[2]))
-        )
-
-        return xpred
-
-
-    def predict(self, x, u):
+    def new_odometry(self, u):
         """
-        Should just predict next pose and add it together with the odometry factor 
+        Does dead-reckoning on newest state. Checks if newest pose estimate is sufficiently different from last keyframe to add it to the pose graph.
         """
-        odom_factor = gtsam.BetweenFactorPose2(X(self.kx), X(self.kx+1), gtsam.Pose2(u[0], u[1], u[2]), self.odometry_noise)
+        # Propagate latest state
+        odom = gtsam.Pose2(u[0], u[1], u[2])
+        self.latest_pose = self.latest_pose.compose(odom)
+        latest_keyframe_id = self.pose_count
 
-        self.add_factor(odom_factor)
-        xpred = self.f(x, u)
+        latest_kf_pose = self.get_kf_pose(latest_keyframe_id)
 
-        self.estimates.insert(X(self.kx + 1), utils.np2pose(xpred))
-
-        self.kx += 1
-
-        return x
+        assert self.estimates.exists(X(latest_keyframe_id)), "new_odometry: latest_keyframe_id doesn't exist in graph??"
 
 
-    def update(self, z):
+        pose_diff = latest_kf_pose.between(self.latest_pose)
+
+        if (
+            # We have moved sufficiently far away
+            np.linalg.norm(pose_diff.translation()) > self.keyframe_distance
+            or 
+            # We have rotated enough
+            np.abs(pose_diff.theta()) > self.keyframe_rotation
+        ):
+            # New keyframe, add to pose graph
+            self.estimates.insert(X(latest_keyframe_id + 1), self.latest_pose)
+
+            # Connect previous keyframe to new keyframe by "virtual odometry", i.e. the difference between them
+            self.graph.add(
+                gtsam.BetweenFactorPose2(
+                    X(latest_keyframe_id), X(latest_keyframe_id + 1), pose_diff, self.Q
+                )
+            )
+
+            # Update pose count
+            self.pose_count = latest_keyframe_id + 1
+
+
+    def meas_in_inertial_cartesian(self, z):
+        # Transpose here to make the math easier
+        z = z.T
+        # Cartesian sensor frame
+        z_c_s = np.vstack((z[0]*np.cos(z[1]), z[0]*np.sin(z[1])))
+        # Cartesian body frame
+        z_c_b = self.sensor_offset.rotation().matrix()@z_c_s + self.sensor_offset.translation()[:,None]
+        # Cartesian inertial (world) frame
+        z_c_i = self.latest_pose.rotation().matrix()@z_c_b + self.latest_pose.translation()[:,None]
+
+        # Transpose back to make the 
+        return z_c_i.T
+
+
+    def new_observation(self, z):
         """
-        Takes in vector of range-bearing measurements of landmarks. 
+        Receives a bunch of new observations, assumed to be in the same frame of latest pose. 
 
-        Should do association by JCBB to existing landmarks first. This will allow for adding extra factors 
+        We need to do associations as well. We first run JCBB on all measurements against all landmarks in graph. We then connect the associated landmarks to the latest pose keyframe.
+
+        All unassociated measurements are stored as candidates. They should only be validated as actual landmarks with enough confidence (must double check how this is done, but looked simple enough)
         """
-        # S = marginals.jointMarginalCovariance(gtsam.KeyVector(nodes))
+
+        # All received measurements are in range-bearing in newest pose, needs to transform to world
+
+        assert len(self.landmarks_idxs.shape) == 1, "GraphSLAM.new_observation: landmark_idx needs to be 1D"
+        assert self.landmarks.shape[0] == self.landmarks_idxs.shape[0], "GraphSLAM.new_observation: Must be equally many landmarks as landmarks_idxs"
+
+        numLmks = self.landmarks_idxs.shape[0]
+        z_c_i = self.meas_in_inertial_cartesian(z)
+
+        assert z_c_i.shape == z.shape, "GraphSLAM.new_observation: z_c_i and z must have same shape"
+
+        # It doesn't make sense to make associations with no prior landmarks
+        if numLmks > 0:
+            marginals = gtsam.Marginals(self.graph, self.estimates)
+            
+            S = marginals.jointMarginalCovariance(gtsam.KeyVector(self.landmarks_idxs)).fullMatrix()
+
+            z = z.ravel()
+            T_bi = self.latest_pose.inverse()
+            landmarks_b = utils.transform(T_bi, self.landmarks)
+            l_ranges = np.linalg.norm(landmarks_b, axis=1)
+            l_bearing = np.arctan2(landmarks_b[:,1], landmarks_b[:,0])
+            z_pred = np.vstack((l_ranges, l_bearing)).ravel("F")
+
+            a = JCBB(z, z_pred, S, self.alphas[0], self.alphas[1])
+
+        # We can make no associations, add all measurements to graph
+        else:
+            # Get latest landmark idx (we start counting on 1)
+            lmk_idx = self.landmarks_idxs.shape[0]
+            kf_idx = self.pose_count
+            latest_kf_pose = self.get_kf_pose(kf_idx)
+            
+            for l in z_c_i:
+                # We add the inertial position of the landmark directly to the graph
+                lmk_idx += 1
+                self.estimates.insert(L(lmk_idx), l)
+                # We need to transform range-bearing to latest keyframe
+                l_b = latest_kf_pose.transformTo(l)
+                l_range = np.linalg.norm(l_b)
+                l_bearing = gtsam.Rot2.relativeBearing(l_b)
+
+                self.graph.add(gtsam.BearingRangeFactor2D(
+                    X(kf_idx), L(lmk_idx), l_bearing, l_range, self.R))
+
+                # Add new landmark to buffer for later
+                self.landmarks_idxs = np.append(self.landmarks_idxs, L(lmk_idx))
+
+            # Add landmark for later association
+            self.landmarks = np.append(self.landmarks, z_c_i, axis=0)
+
+    # def update(self, z):
+    #     """
+    #     Takes in vector of range-bearing measurements of landmarks. 
+
+    #     Should do association by JCBB to existing landmarks first. This will allow for adding extra factors 
+    #     """
+    #     # S = marginals.jointMarginalCovariance(gtsam.KeyVector(nodes))
 
 
-        a = JCBB(z, zpred, S, self.alphas[0], self.alphas[1])
-        # Extract associated measurements
-        zinds = np.empty_like(z, dtype=bool)
-        zinds[::2] = a > -1  # -1 means no association
-        zinds[1::2] = zinds[::2]
-        zass = z[zinds] # associated measurements
+    #     a = JCBB(z, zpred, S, self.alphas[0], self.alphas[1])
+    #     # Extract associated measurements
+    #     zinds = np.empty_like(z, dtype=bool)
+    #     zinds[::2] = a > -1  # -1 means no association
+    #     zinds[1::2] = zinds[::2]
+    #     zass = z[zinds] # associated measurements
 
-        # extract and rearange predicted measurements and cov
-        zbarinds = np.empty_like(zass, dtype=int)
-        zbarinds[::2] = 2 * a[a > -1]
-        zbarinds[1::2] = 2 * a[a > -1] + 1
-        zpredass = zpred[zbarinds]
+    #     # extract and rearange predicted measurements and cov
+    #     zbarinds = np.empty_like(zass, dtype=int)
+    #     zbarinds[::2] = 2 * a[a > -1]
+    #     zbarinds[1::2] = 2 * a[a > -1] + 1
+    #     zpredass = zpred[zbarinds]
+
+
+# %% Testing
+
+if __name__ == "__main__":
+    from scipy.io import loadmat
+    simSLAM_ws = loadmat("simulatedSLAM")
+
+    z = [zk.T for zk in simSLAM_ws["z"].ravel()]
+
+    landmarks = simSLAM_ws["landmarks"].T
+    odometry = simSLAM_ws["odometry"].T
+    poseGT = simSLAM_ws["poseGT"].T
+
+    K = len(z)
+    M = len(landmarks)
+
+    # %% Initilize
+
+    doAsso = True
+
+    JCBBalphas = np.array(
+        [0.0500,    0.0111]
+    )  # first is for joint compatibility, second is individual
+
+    # For consistency testing
+    alpha = 0.05
+
+    q = np.array([0.5, 0.5, 3*np.pi/180])**2;
+    r = np.array([0.06, 2*np.pi/180])**2;
+    p = np.array([0.01, 0.01, 0.01]) ** 2
+
+    slam = GraphSLAM(p, q, r, JCBBalphas)
+
+
+    slam.new_observation(z[0])
+    slam.new_odometry(odometry[0])
+
+    slam.new_observation(z[1])
+    slam.new_odometry(odometry[1])
+
+    print(slam.estimates)
+# %%

@@ -27,7 +27,7 @@ class FrontEnd:
         if (
             np.linalg.norm(pose_diff.translation()) > self.keyframe_distance
             or 
-            utils.wrapToPi(np.abs(pose_diff.theta())) > keyframe_rotation
+            np.abs(pose_diff.theta()) > keyframe_rotation
         ):
             latest_kf_poses.append(new_pose)
 

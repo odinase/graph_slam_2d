@@ -14,3 +14,8 @@ def np2pose(a):
 
 def pose2np(p):
     return np.array([p.x(), p.y(), p.theta()])
+
+def transform(T: gtsam.Pose2, p: np.ndarray):
+    R = T.rotation().matrix()
+    t = T.translation()
+    return p@R.T + t

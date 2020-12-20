@@ -72,22 +72,30 @@ print("Initial Estimate:\n{}".format(initial_estimate))
 params = gtsam.LevenbergMarquardtParams()
 optimizer = gtsam.LevenbergMarquardtOptimizer(graph, initial_estimate, params)
 result = optimizer.optimize()
+# isam = gtsam.ISAM2()
+# isam.update(graph, initial_estimate)
+# for i in range(20):
+#     isam.update()
+# result = isam.calculateEstimate()
 print("\nFinal Result:\n{}".format(result))
 
-optimizer = gtsam.LevenbergMarquardtOptimizer(graph, result, params)
-result = optimizer.optimize()
-print("\nFinal Result:\n{}".format(result))
+# optimizer = gtsam.LevenbergMarquardtOptimizer(graph, result, params)
+# result = optimizer.optimize()
+# print("\nFinal Result:\n{}".format(result))
 
 # Calculate and print marginal covariances for all variables
 marginals = gtsam.Marginals(graph, result)
 
-nodes = np.array([X(1), X(2), X(3)])
+nodes = np.array([L1, L2])
 
 S = marginals.jointMarginalCovariance(gtsam.KeyVector(nodes))
+S_full = S.fullMatrix()
 
 np.set_printoptions(linewidth=120, precision=4, suppress=True)
 
-print(S.at(X(1), X(2)))
+print(S.at(L1, L2))
+
+print(S_full[0:2, 2:4])
 
 
 
