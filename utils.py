@@ -16,6 +16,10 @@ def pose2np(p):
     return np.array([p.x(), p.y(), p.theta()])
 
 def transform(T: gtsam.Pose2, p: np.ndarray):
+    """
+    Assumes p is [[x1, y1], [x2, y2], ...]
+    Obviously must be Cartesian.
+    """
     R = T.rotation().matrix()
     t = T.translation()
     return p@R.T + t

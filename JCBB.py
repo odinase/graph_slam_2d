@@ -1,6 +1,6 @@
 import numpy as np
 from functools import lru_cache
-# import profilehooks
+import profilehooks
 from scipy.stats import chi2
 import scipy.linalg as la
 import utils
@@ -8,6 +8,7 @@ import utils
 chi2isf_cached = lru_cache(maxsize=None)(chi2.isf)
 
 # TODO: make sure a is 0-indexed
+@profilehooks.profile(sort="cumulative")
 def JCBB(z, zbar, S, alpha1, alpha2):
     assert len(z.shape) == 1, "z must be in one row in JCBB"
     assert z.shape[0] % 2 == 0, "z must be equal in x and y"
@@ -34,7 +35,7 @@ def JCBB(z, zbar, S, alpha1, alpha2):
 
     return abest
 
-
+@profilehooks.profile(sort="cumulative")
 def JCBBrec(z, zbar, S, alpha1, g2, j, a, ic, abest):
     m = z.shape[0] // 2
     assert isinstance(m, int), "m in JCBBrec must be int"
@@ -73,7 +74,7 @@ def JCBBrec(z, zbar, S, alpha1, g2, j, a, ic, abest):
     return abest
 
 
-#   @profilehooks.profile(sort="cumulative")
+@profilehooks.profile(sort="cumulative")
 def individualCompatibility(z, zbar, S):
     nz = z.shape[0] // 2
     nz_bar = zbar.shape[0] // 2
@@ -99,7 +100,7 @@ def individualCompatibility(z, zbar, S):
     ic = (v_all * np.linalg.solve(S_all[None], v_all)).sum(axis=(2, 3))
     return ic
 
-
+@profilehooks.profile(sort="cumulative")
 def NIS(z, zbar, S, a):
     zr = z.reshape(-1, 2).T
     zbarr = zbar.reshape(-1, 2).T
