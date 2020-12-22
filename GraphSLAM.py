@@ -50,6 +50,9 @@ class GraphSLAM:
     def get_kf_pose(self, kf_idx):
         return self.estimates.atPose2(X(kf_idx))
 
+    def get_lmk_point(self, lmk_idx):
+        return self.estimates.atPoint2(lmk_idx)
+
     @profilehooks.profile(sort="cumulative")
     def new_odometry(self, u):
         """
@@ -87,6 +90,24 @@ class GraphSLAM:
             # Update pose count
             self.pose_count = latest_keyframe_id + 1
 
+    def transform_jacobian(self, T, z):
+        r, theta = z
+        R = T.rotation().matrix()
+        J = np.array([
+            [np.cos(theta), -r*np.sin(theta)],
+            [np.sin(theta),  r*np.cos(theta)]
+        ])
+        x, y = r*np.cos(theta), r*np.sin(theta)
+        x_trans, y_trans = R@np.array([x, y]) + T.translation()
+        L = np.array([
+            [x_trans/np.sqrt(x_trans**2 + y_trans**2), y_trans/np.sqrt(x_trans**2 + y_trans**2)],
+            [y/(x_trans**2 + y_trans**2), -x/(x_trans**2 + y_trans**2)]
+        ])
+
+        Jac = L@R@J
+
+        return Jac
+
     @profilehooks.profile(sort="cumulative")
     def new_observation(self, z):
         """
@@ -117,19 +138,65 @@ class GraphSLAM:
         if numLmks > 0:
             marginals = gtsam.Marginals(self.graph, self.estimates)
             
+            P_margs = marginals.jointMarginalCovariance(gtsam.KeyVector(np.append(X(self.pose_count), self.landmarks_idxs)))
             P = marginals.jointMarginalCovariance(gtsam.KeyVector(np.append(X(self.pose_count), self.landmarks_idxs))).fullMatrix()
 
-            H = self.H()
+            # P_test = np.zeros_like(P)
+
+            # # Insert landmark - landmark covariance
+            # for i, li in zip(range(0, 2*numLmks, 2), self.landmarks_idxs):
+            #     i_idxs = slice(3+i, 3+i+2)
+            #     for j, lj in zip(range(0, 2*numLmks, 2), self.landmarks_idxs):
+            #         j_idxs = slice(3+j, 3+j+2)
+            #         P_test[i_idxs, j_idxs] = P_margs.at(li, lj)
+
+            
+            # # Insert pose - landmark covariance
+            # for i, l in enumerate(self.landmarks_idxs):
+            #     l_idx = slice(3+i,3+i+2)
+            #     P_test[:3, l_idx] = P_margs.at(X(self.pose_count), l)
+            
+            # # Due to symmetry
+            # P_test[3:, :3] = P_test[:3, 3:].T
+
+            # # Insert pose covariance
+            # P_test[:3, :3] = P_margs.at(X(self.pose_count), X(self.pose_count))
+
+            # We need to permute P to move pose from bottom-right to top-left
+            P = np.roll(P, (3,3), axis=(0,1))
+
+            # assert np.allclose(P_test, P), "P_test not same as P"
+
+            latest_kf_pose = self.get_kf_pose(self.pose_count)
+
+            H = self.H(latest_kf_pose)
             S = H @ P @ H.T
 
             idxs = np.arange(numLmks * 2).reshape(numLmks, 2)
             ## block diag indices for 2 x 2 blocks, broadcast R
             S[idxs[..., None], idxs[:, None]] += self.R.covariance()[None]
 
-            z = z.ravel()
-            z_pred = self.h()
+            T_ib = self.latest_pose
 
-            a = JCBB(z, z_pred, S, self.alphas[0], self.alphas[1])
+            # Transform from inertial to keyframe
+            T_ik = self.get_kf_pose(self.pose_count)
+
+            # Transform from body to keyframe
+            T_kb = T_ik.between(T_ib)
+
+            z_c = utils.polar2cart(z)
+
+            # Cartesian coordinate of measurements in keyframe
+            z_c_k = utils.transform(T_kb, z_c)
+
+            # Polar coordinates, ordering consistent with lmk_idx
+            z_p_k = utils.cart2polar(z_c_k).ravel()
+
+            # z = z.ravel()
+            latest_kf_pose = self.get_kf_pose(self.pose_count)
+            z_pred = self.h(latest_kf_pose)
+
+            a = JCBB(z_p_k, z_pred, S, self.alphas[0], self.alphas[1])
 
             # Needs to reshape back
             z = z.reshape(-1,2)
@@ -171,7 +238,7 @@ class GraphSLAM:
             associated_lmks = [L(idx) for idx in associated_lmk_idxs]
 
             # Now to connect existing landmarks to newest keyframe with virtual measurements
-            for lmk, z_range, z_bearing in zip(associated_lmks, ranges, bearings):
+            for lmk, z_range, z_bearing, org_meas in zip(associated_lmks, ranges, bearings, z):
                 # Likelihood factor between associated landmark and last keyframe
                 meas_factor = gtsam.BearingRangeFactor2D(
                     x_kf, lmk, z_bearing, z_range, self.R
@@ -190,6 +257,9 @@ class GraphSLAM:
             T_is = T_ib.compose(T_bs)
 
             z_c_i = utils.transform(T_is, z_nonass_s)
+
+        else:
+            a = np.zeros(z.shape[0]//2) - 1
 
 
         # We have measurements to add to graph
@@ -216,10 +286,12 @@ class GraphSLAM:
 
             # Add landmark for later association
             self.landmarks = np.append(self.landmarks, z_c_i, axis=0)
-    
+
+        return a + 1
+
     @profilehooks.profile(sort="cumulative")
-    def h(self):
-        T_bi = self.latest_pose.inverse() # Transform from inertial to body
+    def h(self, pose):
+        T_bi = pose.inverse() # Transform from inertial to body
         T_sb = self.sensor_offset.inverse() # Transform from body to sensor
         T_si = T_sb.compose(T_bi) # Transform from inertial to sensor
         landmarks_s = utils.transform(T_si, self.landmarks)
@@ -230,7 +302,7 @@ class GraphSLAM:
         return z_pred
 
     @profilehooks.profile(sort="cumulative")
-    def H(self) -> np.ndarray:
+    def H(self, pose) -> np.ndarray:
         """Calculate the jacobian of h.
         Parameters
         ----------
@@ -262,7 +334,7 @@ class GraphSLAM:
         delta_m = delta_m.T
         zc = zc.T
 
-        zpred = self.h().reshape(-1, 2).T
+        zpred = self.h(pose).reshape(-1, 2).T
         zr = zpred[0]
 
         Rpihalf = utils.rot_mat(np.pi / 2)
@@ -347,8 +419,5 @@ if __name__ == "__main__":
         # We shouldn't have to optimize super often... Right?
         if k % 5 == 0:
             slam.optimize()
-        
-    # get
-    # print(slam.estimates)
-
+    
 # %%
