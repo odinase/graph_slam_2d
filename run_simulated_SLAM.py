@@ -102,14 +102,14 @@ M = len(landmarks)
 doAsso = True
 
 JCBBalphas = np.array(
-    [0.001, 0.0001]
+    [1e-3, 1e-5]
 )  # first is for joint compatibility, second is individual
 
 # For consistency testing
 alpha = 0.05
 
-q = np.array([0.05, 0.05, 1 * np.pi / 180])
-r = np.array([0.05, 1 * np.pi / 180])
+q = np.array([0.5, 0.5, 3 * np.pi / 180])
+r = np.array([0.06, 2 * np.pi / 180])
 # GTSAM doesn't like zero covariance
 p = np.array([1e-9, 1e-9, 1e-9])
 
@@ -149,6 +149,8 @@ for k, (z_k, u_k) in tqdm(enumerate(zip(z[:N], odometry[:N]))):
         slam.new_odometry(u_k)
 
     a[k] = a_k
+
+print(slam.landmarks[slam.landmarks[:,0].argsort()])
 
 for k, a_k in enumerate(a):
     print(f"{k+1}: {a_k}")
