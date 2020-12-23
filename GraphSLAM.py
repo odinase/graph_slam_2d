@@ -247,16 +247,7 @@ class GraphSLAM:
 
             landmarks_to_add = np.any(a == -1)
 
-            z_nonass = z[a == -1]
-            
-            # Cartesian measurement in sensor frame
-            z_nonass_s = utils.polar2cart(z_nonass)
-            
-            T_ib = self.latest_pose
-            T_bs = self.sensor_offset
-            T_is = T_ib.compose(T_bs)
-
-            z_c_i = utils.transform(T_is, z_nonass_s)
+            z_c_i = z_c_i[a == -1]
 
         else:
             a = np.zeros(z.shape[0]//2) - 1
@@ -363,6 +354,9 @@ class GraphSLAM:
         params = gtsam.LevenbergMarquardtParams()
         optimizer = gtsam.LevenbergMarquardtOptimizer(self.graph, self.estimates, params)
         self.estimates = optimizer.optimize()
+
+        # Update latest pose
+        self.latest_pose = self.get_kf_pose(self.pose_count)
 # %% Testing
 
 if __name__ == "__main__":
