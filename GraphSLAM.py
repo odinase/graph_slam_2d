@@ -222,9 +222,7 @@ class GraphSLAM:
         T_sb = self.sensor_offset.inverse() # Transform from body to sensor
         T_si = T_sb.compose(T_bi) # Transform from inertial to sensor
         landmarks_s = utils.transform(T_si, self.landmarks)
-        l_ranges = np.linalg.norm(landmarks_s, axis=1)
-        l_bearing = np.arctan2(landmarks_s[:,1], landmarks_s[:,0])
-        z_pred = np.vstack((l_ranges, l_bearing)).ravel("F")
+        z_pred = utils.cart2polar(landmarks_s).ravel()
 
         return z_pred
 

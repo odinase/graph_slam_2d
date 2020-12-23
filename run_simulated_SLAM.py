@@ -14,6 +14,7 @@ import utils
 from GraphSLAM import GraphSLAM
 import gtsam
 from gtsam.symbol_shorthand import X, L
+import JCBB
 
 try:
     from tqdm import tqdm
@@ -102,16 +103,16 @@ M = len(landmarks)
 doAsso = True
 
 JCBBalphas = np.array(
-    [1e-3, 1e-5]
+    [6e-6, 3.6e-6]
 )  # first is for joint compatibility, second is individual
 
 # For consistency testing
 alpha = 0.05
 
-q = np.array([0.5, 0.5, 3 * np.pi / 180])
-r = np.array([0.06, 2 * np.pi / 180])
+q = np.array([0.5, 0.5, 2 * np.pi/180])
+r = np.array([0.06, 1 * np.pi/180])
 # GTSAM doesn't like zero covariance
-p = np.array([1e-9, 1e-9, 1e-9])
+p = np.array([0, 0, 0])
 
 slam = GraphSLAM(p, q, r, JCBBalphas)
 
@@ -130,7 +131,7 @@ if doAssoPlot:
     figAsso, axAsso = plt.subplots(num=1, clear=True)
 
 # %% Run simulation
-N = 100#K
+N = 50#K
 
 a = [None] * N
 
@@ -141,9 +142,14 @@ total_num_asso = 0
 for k, (z_k, u_k) in tqdm(enumerate(zip(z[:N], odometry[:N]))):
     
     a_k = slam.new_observation(z_k)
-    slam.optimize()
+    num_assos = JCBB.num_associations(a_k)
+    total_num_asso += num_assos
+    print(f"{k+1}: {a_k}\nnum associations: {num_assos}\ntotal: {total_num_asso}")
+
+
     # We shouldn't have to optimize super often... Right?
-    # if k % 5 == 0:
+    if k % 5 == 0:
+        slam.optimize()
 
     if k < K - 1:
         slam.new_odometry(u_k)
@@ -151,9 +157,6 @@ for k, (z_k, u_k) in tqdm(enumerate(zip(z[:N], odometry[:N]))):
     a[k] = a_k
 
 print(slam.landmarks[slam.landmarks[:,0].argsort()])
-
-for k, a_k in enumerate(a):
-    print(f"{k+1}: {a_k}")
 
     # num_asso = np.count_nonzero(a[k] > -1)
 
@@ -191,6 +194,9 @@ pose_est = np.array([utils.pose2np(slam.get_kf_pose(kf)) for kf in range(slam.po
 # lmk_est = [eta_hat_k[3:].reshape(-1, 2) for eta_hat_k in eta_hat]
 # lmk_est_final = lmk_est[N - 1]
 lmk_est_final = np.array([slam.get_lmk_point(lmk) for lmk in slam.landmarks_idxs])
+
+num_lmk = lmk_est_final.shape[0]
+print(f"num_lmk: {num_lmk}")
 
 marginals = gtsam.Marginals(slam.graph, slam.estimates)
 P_hat = marginals.jointMarginalCovariance(gtsam.KeyVector(np.append(X(slam.pose_count), slam.landmarks_idxs)))
