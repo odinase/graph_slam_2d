@@ -109,8 +109,8 @@ JCBBalphas = np.array(
 # For consistency testing
 alpha = 0.05
 
-q = np.array([0.5, 0.5, 2 * np.pi/180])
-r = np.array([0.06, 1 * np.pi/180])
+q = np.array([0.01, 0.0025, 3 * np.pi/180])
+r = np.array([0.5, 3 * np.pi/180])
 # GTSAM doesn't like zero covariance
 p = np.array([0, 0, 0])
 
@@ -131,7 +131,7 @@ if doAssoPlot:
     figAsso, axAsso = plt.subplots(num=1, clear=True)
 
 # %% Run simulation
-N = 50#K
+N = 200#K
 
 a = [None] * N
 
@@ -142,9 +142,9 @@ total_num_asso = 0
 for k, (z_k, u_k) in tqdm(enumerate(zip(z[:N], odometry[:N]))):
     
     a_k = slam.new_observation(z_k)
-    num_assos = JCBB.num_associations(a_k)
-    total_num_asso += num_assos
-    print(f"{k+1}: {a_k}\nnum associations: {num_assos}\ntotal: {total_num_asso}")
+    # num_assos = JCBB.num_associations(a_k)
+    # total_num_asso += num_assos
+    # print(f"{k+1}: {a_k}\nnum associations: {num_assos}\ntotal: {total_num_asso}")
 
 
     # We shouldn't have to optimize super often... Right?
